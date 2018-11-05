@@ -1,4 +1,4 @@
-# schelly-postgres
+# schelly-influx
 
 # Usage
 
