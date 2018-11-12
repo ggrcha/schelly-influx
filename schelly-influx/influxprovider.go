@@ -50,10 +50,12 @@ func (sb InfluxBackuper) Init() error {
 
 	dataStringSeparator = "---"
 
-	info, err := schellyhook.ExecShell("pg_dump --version")
+	info, err := schellyhook.ExecShell("influx --version")
 	if err != nil {
-		sugar.Errorf("Couldn't retrieve pg_dump version. err=%s", err)
+		sugar.Errorf("Couldn't retrieve influx version. err=%s", err)
 		return err
+	} else {
+		sugar.Infof(info)
 	}
 
 	if *backupsDir == "" {
@@ -71,42 +73,19 @@ func (sb InfluxBackuper) Init() error {
 	if *dbname == "" {
 		return fmt.Errorf("`dbname` (--dbname) arg must be set")
 	}
-	if *username == "" {
-		return fmt.Errorf("`username` (--username) arg must be set")
-	}
-	if *password == "" {
-		return fmt.Errorf("`password` (--password) arg must be set")
-	}
+
 	basicDir := "/var/backups"
 	err = mkDirs(basicDir)
 	if err != nil {
 		return fmt.Errorf("Error creating basic workdir /var/backups")
 	}
 
-	// About .pgpass file
-	// https://www.postgresql.org/docs/9.3/static/libpq-pgpass.html
-	pgPassFilePath := basicDir + "/.pgpass"
-	os.Setenv("PGPASSFILE", pgPassFilePath)
-	pgPassStringBytes := []byte("*:*:*:*:" + *password)
-	err = ioutil.WriteFile(pgPassFilePath, pgPassStringBytes, 0600)
-	if err != nil {
-		sugar.Errorf("Error writing .pgpass file. err: %s", err)
-		return err
-	}
-
-	pgPassFile, err := ioutil.ReadFile(pgPassFilePath)
-	if err != nil {
-		sugar.Errorf("Error reading .pgpass file. err: %s", err)
-		return err
-	}
-	sugar.Debugf(pgPassFilePath+" file created. Contents: %s", pgPassFile)
-
 	err = mkDirs(*backupsDir)
 	if err != nil {
 		return fmt.Errorf("Error creating backups `base-dir`. error: %s", err)
 	}
 
-	sugar.Infof("Postgres Provider ready to work. Version: %s", info)
+	sugar.Infof("InfluxDB Provider ready to work. Version: %s", info)
 
 	return nil
 }
