@@ -10,10 +10,7 @@ version: '3.5'
 services:
 
   db:
-    image: postgres
-    environment:
-      - POSTGRES_DB=schelly
-      - POSTGRES_PASSWORD=postgres
+    image: influxdb
 
   schelly:
     image: flaviostutz/schelly
@@ -27,8 +24,8 @@ services:
       - RETENTION_MINUTELY=5
       - WEBHOOK_GRACE_TIME=20
 
-  schelly-postgres-provider:
-    image: tiagostutz/schelly-postgres
+  schelly-influx-provider:
+    image: ggrcha/schelly-influx
     build: .
     ports:
       - 7070:7070
@@ -37,13 +34,11 @@ services:
       - BACKUP_FILE_PATH=/var/backups
       - DATABASE_NAME=schelly
       - DATABASE_CONNECTION_HOST=db
-      - DATABASE_CONNECTION_PORT=5432
-      - DATABASE_AUTH_USERNAME=postgres
-      - DATABASE_AUTH_PASSWORD=postgres
+      - DATABASE_CONNECTION_PORT=8088
 
 networks:
   default:
-    name: schelly-postgres-net
+    name: schelly-influx-net
 ```
 
 ```shell
