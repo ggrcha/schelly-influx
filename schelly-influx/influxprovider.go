@@ -15,14 +15,16 @@ import (
 
 var dataStringSeparator string
 
+var fileName *string //output file or directory name
+
 // backups directory where the backup files will be placed
 var backupsDir *string
 
+var tempBackupDir string
+
 // General options:
-var fileName *string //output file or directory name
 
 // Options controlling the output content:
-var portable *bool    // InfluxDB Enterprise-format
 var retention *string // retetion policy.
 var shard *string     // Shard ID of the shard to be backed up
 var start *string     // Include all points starting with the specified timestamp. RFC3339 format
@@ -56,9 +58,6 @@ func (sb InfluxBackuper) Init() error {
 	if *backupsDir == "" {
 		return fmt.Errorf("backup-dir arg must be defined")
 	}
-	if strings.Contains(*fileName, "--") {
-		return fmt.Errorf("Cannot use `--` on file name. Please change the filename and try again; you can still use `-`")
-	}
 	if *host == "" {
 		return fmt.Errorf("`database host` (-host) arg must be set. It can be an IP address or a domain name")
 	}
@@ -69,10 +68,11 @@ func (sb InfluxBackuper) Init() error {
 		return fmt.Errorf("`database` (-database) arg must be set")
 	}
 
-	basicDir := "/var/backups"
-	err = mkDirs(basicDir)
+	tempBackupDir = "temp/" + *backupsDir
+	// creates temporary work dir for backup files
+	err = mkDirs(tempBackupDir)
 	if err != nil {
-		return fmt.Errorf("Error creating basic workdir /var/backups")
+		return fmt.Errorf("Error creating backups `temp base-dir`. error: %s", err)
 	}
 
 	err = mkDirs(*backupsDir)
@@ -92,11 +92,9 @@ func (sb InfluxBackuper) RegisterFlags() error {
 	sugar := logger.Sugar()
 
 	// General options:
-	backupsDir = flag.String("backup-dir", "/var/backups/database", "--backup-dir=FILENAME -> output file path and name")
-	fileName = flag.String("file-name", "database_dump", "--file-name=FILENAME -> output file path and name")
+	backupsDir = flag.String("backup-dir", "/var/backups/database", "--backup-dir=PATH -> output file path")
 
 	// Options controlling the output content:
-	portable = flag.Bool("portable", true, "-portable -> Generates backup files in the newer InfluxDB Enterprise-compatible format. Highly recommended for all InfluxDB OSS users")
 	retention = flag.String("retention", "", "-retention -> Retention policy for the backup. If not specified, the default is to use all retention policies. If specified, then -database is required")
 	shard = flag.String("shard", "", "-shard -> Shard ID of the shard to be backed up")
 	start = flag.String("start", "", "-start -> Include all points starting with the specified timestamp (RFC3339 format).")
@@ -125,10 +123,6 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 
 	dumpID := time.Now().Format("20060102150405")
 
-	portableString := ""
-	if *portable != true {
-		portableString = " -portable"
-	}
 	retentionString := ""
 	if *retention != "" {
 		retentionString = " -retention" + *retention
@@ -150,7 +144,7 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 		sinceString = " -since" + *since
 	}
 
-	backupCommand := "influxd backup -database=" + *database + " -host=" + *host + ":" + strconv.Itoa(*port) + retentionString + shardString + startString + endString + portableString + sinceString + " " + *backupsDir
+	backupCommand := "influxd backup -portable -database=" + *database + " -host=" + *host + ":" + strconv.Itoa(*port) + retentionString + shardString + startString + endString + sinceString + " " + tempBackupDir
 	sugar.Debugf("Executing influxd backup command: %s", backupCommand)
 	out, err := schellyhook.ExecShellTimeout(backupCommand, timeout, shellContext)
 
@@ -173,6 +167,21 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 
 	sugar.Debugf("InfluxDB backup started. Output log:")
 	sugar.Debugf(out)
+
+	files, err := ioutil.ReadDir(tempBackupDir)
+
+	if err != nil {
+		sugar.Error("Error listing temp backup dir: %s", err)
+		return err
+	}
+
+	for _, file := range files {
+		input, _ := ioutil.ReadFile(file.Name())
+		_ = ioutil.WriteFile(*backupsDir+"/"+file.Name(), input, 0644)
+	}
+
+	os.RemoveAll(tempBackupDir)
+
 	saveDataID(apiID, dumpID)
 
 	sugar.Infof("InfluxDB backup launched")
@@ -187,6 +196,8 @@ func (sb InfluxBackuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 
 	sugar.Debugf("GetAllBackups")
 	files, err := ioutil.ReadDir(*backupsDir)
+	sugar.Debugf("files: ", files)
+	sugar.Debugf("error: ", err)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +205,11 @@ func (sb InfluxBackuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 	backups := make([]schellyhook.SchellyResponse, 0)
 	for _, fileName := range files {
 
+		sugar.Debugf("filename: ", fileName.Name())
 		id := strings.Split(fileName.Name(), dataStringSeparator)[1]
+		sugar.Debugf("id: ", id)
 		dataID := strings.Split(fileName.Name(), dataStringSeparator)[2]
+		sugar.Debugf("dataID: ", dataID)
 		sizeMB := fileName.Size()
 
 		backupFilePath := *backupsDir + "/" + fileName.Name()
