@@ -20,24 +20,19 @@ var backupsDir *string
 
 // General options:
 var fileName *string //output file or directory name
-var splitFile *bool  //output file or directory name
 
 // Options controlling the output content:
-var dataOnly *bool   // dump only the data, not the schema
-var schemaOnly *bool // dump only the schema, no data
-var encoding *string // dump the data in encoding ENCODING
-// var schema *string[]           // dump the named schema(s) only
-// var excludeSchema *string[]    // do NOT dump the named schema(s)
-// var table *string[]            // dump the named table(s) only
-// var excludeTable *string[]     // do NOT dump the named table(s)
-// var excludeTableData *string[] // do NOT dump data for the named table(s)
+var portable *bool    // InfluxDB Enterprise-format
+var retention *string // retetion policy.
+var shard *string     // Shard ID of the shard to be backed up
+var start *string     // Include all points starting with the specified timestamp. RFC3339 format
+var end *string       // Exclude all results after the specified timestamp. RFC3339 format.
+var since *string     // Perform an incremental backup after the specified timestamp RFC3339 format.
 
 // Connection options:
-var dbname *string   // database to dump
+var database *string // database to dump
 var host *string     // database server host or socket directory
 var port *int        // database server port number
-var username *string // connect as specified database user
-var password *string // force password prompt (should happen automatically)
 
 //InfluxBackuper sample backuper
 type InfluxBackuper struct{}
@@ -65,13 +60,13 @@ func (sb InfluxBackuper) Init() error {
 		return fmt.Errorf("Cannot use `--` on file name. Please change the filename and try again; you can still use `-`")
 	}
 	if *host == "" {
-		return fmt.Errorf("`database host` (--host) arg must be set. It can be an IP address or a domain name")
+		return fmt.Errorf("`database host` (-host) arg must be set. It can be an IP address or a domain name")
 	}
 	if *port <= 0 {
-		return fmt.Errorf("`database port` (--port) arg must be a valid value, such as 5432")
+		return fmt.Errorf("`database port` (-port) arg must be a valid value, such as 5432")
 	}
-	if *dbname == "" {
-		return fmt.Errorf("`dbname` (--dbname) arg must be set")
+	if *database == "" {
+		return fmt.Errorf("`database` (-database) arg must be set")
 	}
 
 	basicDir := "/var/backups"
@@ -99,24 +94,19 @@ func (sb InfluxBackuper) RegisterFlags() error {
 	// General options:
 	backupsDir = flag.String("backup-dir", "/var/backups/database", "--backup-dir=FILENAME -> output file path and name")
 	fileName = flag.String("file-name", "database_dump", "--file-name=FILENAME -> output file path and name")
-	splitFile = flag.Bool("split-file", false, "--split-file -> split the backup on multiple files on a directory (pg_dump --format=d)")
 
 	// Options controlling the output content:
-	dataOnly = flag.Bool("data-only", false, "--data-only -> dump only the data, not the schema")
-	schemaOnly = flag.Bool("schema-only", false, "--schema-only -> dump only the schema, no data")
-	encoding = flag.String("encoding", "UTF-8", "--encoding=ENCODING -> dump the data in encoding ENCODING")
-	// schema = flag.Var("schema","","--schema=SCHEMA -> dump the named schema(s) only")
-	// excludeSchema = flag.Var("exclude-schema", "", "--exclude-schema=SCHEMA -> do NOT dump the named schema(s)")
-	// table = flag.Var("table", "", "--table=TABLE -> dump the named table(s) only")
-	// excludeTable = flag.Var("exclude-table", "", "--exclude-table=TABLE -> do NOT dump the named table(s)")
-	// excludeTableData = flag.Var("exclude-table-data", "", "--exclude-table-data=TABLE -> do NOT dump data for the named table(s)")
+	portable = flag.Bool("portable", true, "-portable -> Generates backup files in the newer InfluxDB Enterprise-compatible format. Highly recommended for all InfluxDB OSS users")
+	retention = flag.String("retention", "", "-retention -> Retention policy for the backup. If not specified, the default is to use all retention policies. If specified, then -database is required")
+	shard = flag.String("shard", "", "-shard -> Shard ID of the shard to be backed up")
+	start = flag.String("start", "", "-start -> Include all points starting with the specified timestamp (RFC3339 format).")
+	end = flag.String("end", "", "-end -> Exclude all results after the specified timestamp (RFC3339 format).")
+	since = flag.String("since", "", "-since -> Perform an incremental backup after the specified timestamp RFC3339 format.")
 
 	// Connection options:
-	dbname = flag.String("dbname", "", "--dbname=DBNAME -> database to dump")
+	database = flag.String("database", "", "-database=DBNAME -> database to dump")
 	host = flag.String("host", "", "--host=HOSTNAME -> database server host or socket directory")
-	port = flag.Int("port", 5432, "--port=PORT -> database server port number")
-	username = flag.String("username", "postgres", "--username=NAME -> connect as specified database user")
-	password = flag.String("password", "", " --password -> password to be placed on ~/.pgpass")
+	port = flag.Int("port", 8088, "--port=PORT -> database server port number")
 
 	// flag.Parse() //invoked by the hook
 	sugar.Infof("Flags registration completed")
@@ -131,39 +121,46 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 	sugar := logger.Sugar()
 
 	sugar.Infof("CreateNewBackup() apiID=%s timeout=%d s", apiID, timeout.Seconds)
-	sugar.Infof("Running Postgres pg_dump backup")
+	sugar.Infof("Running InfluxDB backup")
 
-	pgDumpID := time.Now().Format("20060102150405")
-	fileString := "--file=" + resolveFilePath(apiID, pgDumpID)
+	dumpID := time.Now().Format("20060102150405")
 
-	dataOnlyString := ""
-	if *dataOnly == true {
-		dataOnlyString = "--data-only"
+	portableString := ""
+	if *portable != true {
+		portableString = " -portable"
 	}
-	schemaOnlyString := ""
-	if *schemaOnly == true {
-		schemaOnlyString = "--schema-only"
+	retentionString := ""
+	if *retention != "" {
+		retentionString = " -retention" + *retention
 	}
-	encodingString := ""
-	if encoding != nil {
-		encodingString = "--encoding=" + *encoding
+	shardString := ""
+	if *shard != "" {
+		shardString = " -shard=" + *shard
 	}
-	backupFormat := "d"
-	if *splitFile == false {
-		backupFormat = "p"
+	startString := ""
+	if *start != "" {
+		startString = " -start" + *start
+	}
+	endString := ""
+	if *end != "" {
+		endString = " -end" + *end
+	}
+	sinceString := ""
+	if *since != "" {
+		sinceString = " -since" + *since
 	}
 
-	pgDumpCommand := "pg_dump --username=" + *username + " --dbname=" + *dbname + " --host=" + *host + " --port=" + strconv.Itoa(*port) + " --verbose --format=" + backupFormat + " --jobs=1 --compress=9 --column-inserts --inserts --quote-all-identifiers --clean --create " + fileString + " " + dataOnlyString + " " + schemaOnlyString + " " + encodingString
-	sugar.Debugf("Executing pg_dump command: %s", pgDumpCommand)
-	out, err := schellyhook.ExecShellTimeout(pgDumpCommand, timeout, shellContext)
+	backupCommand := "influxd backup -database=" + *database + " -host=" + *host + ":" + strconv.Itoa(*port) + retentionString + shardString + startString + endString + portableString + sinceString + " " + *backupsDir
+	sugar.Debugf("Executing influxd backup command: %s", backupCommand)
+	out, err := schellyhook.ExecShellTimeout(backupCommand, timeout, shellContext)
 
 	if err != nil {
 		status := (*shellContext).CmdRef.Status()
 		if status.Exit == -1 {
-			sugar.Warnf("PostgresProvider pg_dump command timeout enforced (%d seconds)", (status.StopTs-status.StartTs)/1000000000)
+			sugar.Warnf("InfluxProvider influxd backup command timeout enforced (%d seconds)", (status.StopTs-status.StartTs)/1000000000)
 		}
-		sugar.Debugf("PostgresProvider pg_dump error. out=%s; err=%s", out, err.Error())
-		errorFileBytes := []byte(pgDumpID)
+		sugar.Debugf("InfluxProvider backup error. out=%s; err=%s", out, err.Error())
+		errorFileBytes := []byte(dumpID)
 		errorFilePath := resolveErrorFilePath(apiID)
 		err := ioutil.WriteFile(errorFilePath, errorFileBytes, 0600)
 		if err != nil {
@@ -174,11 +171,11 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 		return err
 	}
 
-	sugar.Debugf("PostgresProvider pg_dump backup started. Output log:")
+	sugar.Debugf("InfluxDB backup started. Output log:")
 	sugar.Debugf(out)
-	saveDataID(apiID, pgDumpID)
+	saveDataID(apiID, dumpID)
 
-	sugar.Infof("Postgres backup launched")
+	sugar.Infof("InfluxDB backup launched")
 	return nil
 }
 
@@ -344,12 +341,12 @@ func getDataID(apiID string) (string, error) {
 	return "", fmt.Errorf("pgDumpID for %s not found", apiID)
 }
 
-func saveDataID(apiID string, pgDumpID string) error {
+func saveDataID(apiID string, dumpID string) error {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync() // flushes buffer, if any
 	sugar := logger.Sugar()
 
-	sugar.Debugf("IDs already saved apiID %s <-> pgDumpID %s", apiID, pgDumpID)
+	sugar.Debugf("IDs already saved apiID %s <-> dumpID %s", apiID, dumpID)
 	return nil
 }
 
