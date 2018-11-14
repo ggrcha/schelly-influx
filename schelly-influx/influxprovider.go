@@ -177,7 +177,7 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 
 	for _, file := range files {
 		input, _ := ioutil.ReadFile(file.Name())
-		_ = ioutil.WriteFile(*backupsDir+"/"+file.Name(), input, 0644)
+		_ = ioutil.WriteFile(*backupsDir+"/"+apiID+dataStringSeparator+dumpID+dataStringSeparator+file.Name(), input, 0644)
 	}
 
 	os.RemoveAll(tempBackupDir)
@@ -196,8 +196,7 @@ func (sb InfluxBackuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 
 	sugar.Debugf("GetAllBackups")
 	files, err := ioutil.ReadDir(*backupsDir)
-	sugar.Debugf("files: ", files)
-	sugar.Debugf("error: ", err)
+
 	if err != nil {
 		return nil, err
 	}
@@ -205,11 +204,8 @@ func (sb InfluxBackuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 	backups := make([]schellyhook.SchellyResponse, 0)
 	for _, fileName := range files {
 
-		sugar.Debugf("filename: ", fileName.Name())
-		id := strings.Split(fileName.Name(), dataStringSeparator)[1]
-		sugar.Debugf("id: ", id)
-		dataID := strings.Split(fileName.Name(), dataStringSeparator)[2]
-		sugar.Debugf("dataID: ", dataID)
+		id := strings.Split(fileName.Name(), dataStringSeparator)[0]
+		dataID := strings.Split(fileName.Name(), dataStringSeparator)[1]
 		sizeMB := fileName.Size()
 
 		backupFilePath := *backupsDir + "/" + fileName.Name()
