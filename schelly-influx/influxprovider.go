@@ -20,6 +20,7 @@ var fileName *string //output file or directory name
 // backups directory where the backup files will be placed
 var backupsDir *string
 
+var baseTempBackupDir string
 var tempBackupDir string
 
 // General options:
@@ -68,7 +69,9 @@ func (sb InfluxBackuper) Init() error {
 		return fmt.Errorf("`database` (-database) arg must be set")
 	}
 
-	tempBackupDir = "temp/" + *backupsDir
+	baseTempBackupDir = "temp/"
+	tempBackupDir = baseTempBackupDir + *backupsDir
+
 	// creates temporary work dir for backup files
 	err = mkDirs(tempBackupDir)
 	if err != nil {
@@ -180,7 +183,17 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 		_ = ioutil.WriteFile(*backupsDir+"/"+apiID+dataStringSeparator+dumpID+dataStringSeparator+file.Name(), input, 0644)
 	}
 
-	os.RemoveAll(tempBackupDir)
+	err = os.RemoveAll(baseTempBackupDir)
+
+	if err != nil {
+		sugar.Error("Error removing staging files: %s", err)
+		return err
+	}
+
+	if err != nil {
+		sugar.Error("Error removing staging files: %s", err)
+		return err
+	}
 
 	saveDataID(apiID, dumpID)
 
