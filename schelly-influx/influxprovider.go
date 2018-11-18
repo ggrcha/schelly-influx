@@ -15,7 +15,7 @@ import (
 
 var dataStringSeparator string
 
-var fileName *string //output file or directory name
+var fileName *string //output file
 
 // backups directory where the backup files will be placed
 var backupsDir *string
@@ -250,23 +250,44 @@ func (sb InfluxBackuper) GetBackup(apiID string) (*schellyhook.SchellyResponse, 
 
 	sugar.Debugf("GetBackup apiID=%s", apiID)
 
-	pgDumpID, err0 := getDataID(apiID)
+	dumpID, filename, err0 := getDataID(apiID)
 	if err0 != nil {
-		sugar.Debugf("Error finding pgDumpID for apiId %s. err=%s", apiID, err0)
+		sugar.Debugf("Error finding dumpID for apiId %s. err=%s", apiID, err0)
 		return nil, err0
 	}
-	if pgDumpID == "" {
-		sugar.Debugf("pgDumpID not found for apiId %s.", apiID)
+	if dumpID == "" {
+		sugar.Debugf("dumpID not found for apiId %s.", apiID)
 		return nil, nil
 	}
 
-	sugar.Debugf("Found pgDumpID=" + pgDumpID + " for apiID: " + apiID + ". Finding Backup file...")
-	res, err := findBackup(apiID, pgDumpID)
-	if err != nil {
-		return nil, err
+	backupFilePath := *backupsDir + "/" + filename
+
+	result, err0 := os.Open(backupFilePath)
+
+	if err0 != nil {
+		sugar.Debugf("Error opening file %s apiId %s. err=%s", backupFilePath, apiID, err0)
+		return nil, err0
 	}
 
-	return res, nil
+	file, err0 := result.Stat()
+
+	if err0 != nil {
+		sugar.Debugf("Error geting stats for file %s apiId %s. err=%s", backupFilePath, apiID, err0)
+		return nil, err0
+	}
+
+	sugar.Debugf("Found dumpID=" + dumpID + " for apiID: " + apiID + ". Finding Backup file...")
+
+	status := "available"
+
+	return &schellyhook.SchellyResponse{
+		ID:      apiID,
+		DataID:  dumpID,
+		Status:  status,
+		Message: backupFilePath,
+		SizeMB:  float64(file.Size()),
+	}, nil
+
 }
 
 //DeleteBackup removes current backup from underlaying backup storage
@@ -277,74 +298,36 @@ func (sb InfluxBackuper) DeleteBackup(apiID string) error {
 
 	sugar.Debugf("DeleteBackup apiID=%s", apiID)
 
-	errorFilePath := resolveErrorFilePath(apiID)
-	_, err := os.Open(errorFilePath)
-	if err == nil { //if the file exists, this backup should be discarded
-		sugar.Debugf("Error file found: %s. The backup %s had problems during execution and will be considered as deleted", errorFilePath, apiID)
-		os.Remove(errorFilePath) //try to remove the file
+	dumpID, filename, err0 := getDataID(apiID)
+	if err0 != nil {
+		sugar.Debugf("Error finding dumpID for apiId %s. err=%s", apiID, err0)
+		return err0
+	}
+	if dumpID == "" {
+		sugar.Debugf("dumpID not found for apiId %s.", apiID)
 		return nil
 	}
 
-	pgDumpID, err0 := getDataID(apiID)
-	if err0 != nil {
-		sugar.Debugf("pgDumpID not found for apiId %s. err=%s", apiID, err0)
-		return err0
-	}
+	backupFilePath := *backupsDir + "/" + filename
 
-	_, err0 = findBackup(apiID, pgDumpID)
-	if err0 != nil {
-		sugar.Debugf("Backup apiID %s, pgDumpID %s not found for removal", apiID, pgDumpID)
-		return err0
-	}
-
-	sugar.Debugf("Backup apiID=%s pgDumpID=%s found. Proceeding to deletion", apiID, pgDumpID)
-
-	err1 := os.Remove(resolveFilePath(apiID, pgDumpID))
+	err1 := os.Remove(backupFilePath)
 	if err1 != nil {
 		return err1
 	}
-	sugar.Debugf("Delete apiID %s pgDumpID %s successful", apiID, pgDumpID)
+	sugar.Debugf("Delete apiID %s pgDumpID %s successful", apiID, dumpID)
 	return nil
+
 }
 
-func findBackup(apiID string, pgDumpID string) (*schellyhook.SchellyResponse, error) {
+func getDataID(apiID string) (string, string, error) {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync() // flushes buffer, if any
 	sugar := logger.Sugar()
 
-	backupFilePath := resolveFilePath(apiID, pgDumpID)
-	result, err := os.Open(backupFilePath)
-	if err != nil {
-		sugar.Errorf("File " + backupFilePath + " not found")
-		return nil, err
-	}
-	file, err := result.Stat()
-	if err != nil {
-		return nil, err
-	}
-
-	sugar.Debugf("pgDumpID found. Details: %s", file)
-
-	status := "available"
-
-	return &schellyhook.SchellyResponse{
-		ID:      apiID,
-		DataID:  pgDumpID,
-		Status:  status,
-		Message: backupFilePath,
-		SizeMB:  float64(file.Size()),
-	}, nil
-}
-
-func getDataID(apiID string) (string, error) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync() // flushes buffer, if any
-	sugar := logger.Sugar()
-
-	sugar.Debugf("Searching dataID (pgDumpID) for apiID: %s", apiID)
+	sugar.Debugf("Searching dataID for apiID: %s", apiID)
 	files, err := ioutil.ReadDir(*backupsDir)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, file := range files {
 		sugar.Debugf("Backup File <Loop>: %s", file.Name())
@@ -353,15 +336,15 @@ func getDataID(apiID string) (string, error) {
 				sugar.Debugf("Found file for apiID reference: %s", apiID)
 				_, err0 := ioutil.ReadFile(*backupsDir + "/" + file.Name())
 				if err0 != nil {
-					return "", err0
+					return "", "", err0
 				}
-				pgDumpID := strings.Split(file.Name(), dataStringSeparator)[2]
+				pgDumpID := strings.Split(file.Name(), dataStringSeparator)[1]
 				sugar.Debugf("apiID %s <-> pgDumpID %s", apiID, pgDumpID)
-				return pgDumpID, nil
+				return pgDumpID, file.Name(), nil
 			}
 		}
 	}
-	return "", fmt.Errorf("pgDumpID for %s not found", apiID)
+	return "", "", fmt.Errorf("dumpID for %s not found", apiID)
 }
 
 func saveDataID(apiID string, dumpID string) error {
@@ -373,9 +356,6 @@ func saveDataID(apiID string, dumpID string) error {
 	return nil
 }
 
-func resolveFilePath(apiID string, pgDumpID string) string {
-	return *backupsDir + "/" + *fileName + dataStringSeparator + apiID + dataStringSeparator + pgDumpID
-}
 func resolveErrorFilePath(apiID string) string {
 	return *backupsDir + "/" + apiID + ".err"
 }
