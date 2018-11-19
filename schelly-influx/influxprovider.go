@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -179,8 +180,25 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 	}
 
 	for _, file := range files {
-		input, _ := ioutil.ReadFile(file.Name())
-		_ = ioutil.WriteFile(*backupsDir+"/"+apiID+dataStringSeparator+dumpID+dataStringSeparator+file.Name(), input, 0644)
+		input, err := os.Open(tempBackupDir + "/" + file.Name())
+		if err != nil {
+			sugar.Errorf("Error opening files: %s", err)
+			return err
+		}
+		defer input.Close()
+
+		output, err := os.Create(*backupsDir + "/" + apiID + dataStringSeparator + dumpID + dataStringSeparator + file.Name())
+		if err != nil {
+			sugar.Errorf("Error creating temp files: %s", err)
+			return err
+		}
+		defer output.Close()
+
+		_, err = io.Copy(output, input)
+		if err != nil {
+			sugar.Errorf("Error copying temp files: %s", err)
+			return err
+		}
 	}
 
 	err = os.RemoveAll(baseTempBackupDir)
@@ -298,23 +316,29 @@ func (sb InfluxBackuper) DeleteBackup(apiID string) error {
 
 	sugar.Debugf("DeleteBackup apiID=%s", apiID)
 
-	dumpID, filename, err0 := getDataID(apiID)
-	if err0 != nil {
-		sugar.Debugf("Error finding dumpID for apiId %s. err=%s", apiID, err0)
-		return err0
-	}
-	if dumpID == "" {
-		sugar.Debugf("dumpID not found for apiId %s.", apiID)
-		return nil
+	files, err := ioutil.ReadDir(*backupsDir)
+	if err != nil {
+		return err
 	}
 
-	backupFilePath := *backupsDir + "/" + filename
-
-	err1 := os.Remove(backupFilePath)
-	if err1 != nil {
-		return err1
+	for _, file := range files {
+		sugar.Debugf("Backup File <Loop>: %s", file.Name())
+		if strings.Contains(file.Name(), apiID) && strings.Contains(file.Name(), dataStringSeparator) {
+			if _, err := os.Stat(*backupsDir + "/" + file.Name()); err == nil {
+				sugar.Debugf("Found file for apiID reference: %s", apiID)
+				_, err0 := ioutil.ReadFile(*backupsDir + "/" + file.Name())
+				if err0 != nil {
+					return err0
+				}
+				err1 := os.Remove(*backupsDir + "/" + file.Name())
+				if err1 != nil {
+					return err1
+				}
+			}
+		}
 	}
-	sugar.Debugf("Delete apiID %s pgDumpID %s successful", apiID, dumpID)
+
+	sugar.Debugf("Delete apiID %s pgDumpID %s successful", apiID)
 	return nil
 
 }
