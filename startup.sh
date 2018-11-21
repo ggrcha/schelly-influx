@@ -2,8 +2,10 @@
 set +e
 # set +x
 
+cd /bin
+
 echo "Starting Influx API..."
-./schelly-influxdb \
+./schelly-influx \
     --listen-ip=$LISTEN_IP \
     --listen-port=$LISTEN_PORT \
     --log-level=$LOG_LEVEL \

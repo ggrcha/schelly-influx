@@ -15,7 +15,7 @@ services:
   schelly:
     image: flaviostutz/schelly
     ports:
-      - 8080:8080
+      - 7070:7070
     environment:
       - LOG_LEVEL=debug
       - BACKUP_NAME=schelly-influx
@@ -64,15 +64,16 @@ As in https://github.com/flaviostutz/schelly#webhook-spec
 
 ```shell
 General options:
-  --file=FILENAME          output file or directory name
-
-Options controlling the output content:
-  --data-only              dump only the data, not the schema
+  --retention=retention retention policy for the backup. If not specified, the default is to use all retention policies.
+  --shard=shard         shard ID of the shard to be backed up
+  --start=start         include all points starting with the specified timestamp (RFC3339 format)
+	--end=end             exclude all results after the specified timestamp (RFC3339 format)
+	--since=since         perform an incremental backup after the specified timestamp RFC3339 format
 
 Connection options:
-  --dbname=DBNAME      database to dump (required)
-  --host=HOSTNAME      database server host or socket directory (required)
-  --port=PORT          database server port number
+  --database=DBNAME     database to dump (required)
+  --host=HOSTNAME       database server host or socket directory (required)
+  --port=PORT           database server port number
 
 ```
 
