@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -20,9 +19,6 @@ var fileName *string //output file
 
 // backups directory where the backup files will be placed
 var backupsDir *string
-
-var baseTempBackupDir string
-var tempBackupDir string
 
 // General options:
 
@@ -68,15 +64,6 @@ func (sb InfluxBackuper) Init() error {
 	}
 	if *database == "" {
 		return fmt.Errorf("`database` (-database) arg must be set")
-	}
-
-	baseTempBackupDir = "temp/"
-	tempBackupDir = baseTempBackupDir + *backupsDir
-
-	// creates temporary work dir for backup files
-	err = mkDirs(tempBackupDir)
-	if err != nil {
-		return fmt.Errorf("Error creating backups `temp base-dir`. error: %s", err)
 	}
 
 	err = mkDirs(*backupsDir)
@@ -127,6 +114,8 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 
 	dumpID := time.Now().Format("20060102150405")
 
+	thisBackupDir := *backupsDir + "/" + apiID + dataStringSeparator + dumpID
+
 	retentionString := ""
 	if *retention != "" {
 		retentionString = " -retention" + *retention
@@ -148,7 +137,7 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 		sinceString = " -since" + *since
 	}
 
-	backupCommand := "influxd backup -portable -database=" + *database + " -host=" + *host + ":" + strconv.Itoa(*port) + retentionString + shardString + startString + endString + sinceString + " " + tempBackupDir
+	backupCommand := "influxd backup -portable -database=" + *database + " -host=" + *host + ":" + strconv.Itoa(*port) + retentionString + shardString + startString + endString + sinceString + " " + thisBackupDir
 	sugar.Debugf("Executing influxd backup command: %s", backupCommand)
 	out, err := schellyhook.ExecShellTimeout(backupCommand, timeout, shellContext)
 
@@ -172,49 +161,6 @@ func (sb InfluxBackuper) CreateNewBackup(apiID string, timeout time.Duration, sh
 	sugar.Debugf("InfluxDB backup started. Output log:")
 	sugar.Debugf(out)
 
-	files, err := ioutil.ReadDir(tempBackupDir)
-
-	if err != nil {
-		sugar.Error("Error listing temp backup dir: %s", err)
-		return err
-	}
-
-	for _, file := range files {
-		input, err := os.Open(tempBackupDir + "/" + file.Name())
-		if err != nil {
-			sugar.Errorf("Error opening files: %s", err)
-			return err
-		}
-		defer input.Close()
-
-		output, err := os.Create(*backupsDir + "/" + apiID + dataStringSeparator + dumpID + dataStringSeparator + file.Name())
-		if err != nil {
-			sugar.Errorf("Error creating temp files: %s", err)
-			return err
-		}
-		defer output.Close()
-
-		_, err = io.Copy(output, input)
-		if err != nil {
-			sugar.Errorf("Error copying temp files: %s", err)
-			return err
-		}
-	}
-
-	err = os.RemoveAll(baseTempBackupDir)
-
-	if err != nil {
-		sugar.Error("Error removing staging files: %s", err)
-		return err
-	}
-
-	if err != nil {
-		sugar.Error("Error removing staging files: %s", err)
-		return err
-	}
-
-	saveDataID(apiID, dumpID)
-
 	sugar.Infof("InfluxDB backup launched")
 	return nil
 }
@@ -237,13 +183,15 @@ func (sb InfluxBackuper) GetAllBackups() ([]schellyhook.SchellyResponse, error) 
 
 		id := strings.Split(fileName.Name(), dataStringSeparator)[0]
 		dataID := strings.Split(fileName.Name(), dataStringSeparator)[1]
-		sizeMB := fileName.Size()
 
 		backupFilePath := *backupsDir + "/" + fileName.Name()
 		_, err = os.Open(backupFilePath)
 		if err != nil {
 			return nil, err
 		}
+
+		sizeMB := retriveBackupSize(backupFilePath)
+
 		sugar.Debugf("Found and opened backup file: %s", backupFilePath)
 		status := "available"
 
@@ -268,44 +216,33 @@ func (sb InfluxBackuper) GetBackup(apiID string) (*schellyhook.SchellyResponse, 
 
 	sugar.Debugf("GetBackup apiID=%s", apiID)
 
-	dumpID, filename, err0 := getDataID(apiID)
-	if err0 != nil {
-		sugar.Debugf("Error finding dumpID for apiId %s. err=%s", apiID, err0)
-		return nil, err0
-	}
-	if dumpID == "" {
-		sugar.Debugf("dumpID not found for apiId %s.", apiID)
-		return nil, nil
+	dirs, err := ioutil.ReadDir(*backupsDir)
+
+	if err != nil {
+		return nil, err
 	}
 
-	backupFilePath := *backupsDir + "/" + filename
+	for _, dir := range dirs {
 
-	result, err0 := os.Open(backupFilePath)
+		if strings.Contains(dir.Name(), apiID) && strings.Contains(dir.Name(), dataStringSeparator) {
+			id := strings.Split(dir.Name(), dataStringSeparator)[0]
+			dataID := strings.Split(dir.Name(), dataStringSeparator)[1]
+			sizeMB := retriveBackupSize(*backupsDir + "/" + dir.Name())
+			status := "available"
 
-	if err0 != nil {
-		sugar.Debugf("Error opening file %s apiId %s. err=%s", backupFilePath, apiID, err0)
-		return nil, err0
+			return &schellyhook.SchellyResponse{
+				ID:      id,
+				DataID:  dataID,
+				Status:  status,
+				Message: dir.Name(),
+				SizeMB:  float64(sizeMB),
+			}, nil
+		}
 	}
 
-	file, err0 := result.Stat()
+	sugar.Debugf("dumpID not found for apiId %s.", apiID)
 
-	if err0 != nil {
-		sugar.Debugf("Error geting stats for file %s apiId %s. err=%s", backupFilePath, apiID, err0)
-		return nil, err0
-	}
-
-	sugar.Debugf("Found dumpID=" + dumpID + " for apiID: " + apiID + ". Finding Backup file...")
-
-	status := "available"
-
-	return &schellyhook.SchellyResponse{
-		ID:      apiID,
-		DataID:  dumpID,
-		Status:  status,
-		Message: backupFilePath,
-		SizeMB:  float64(file.Size()),
-	}, nil
-
+	return nil, nil
 }
 
 //DeleteBackup removes current backup from underlaying backup storage
@@ -316,21 +253,17 @@ func (sb InfluxBackuper) DeleteBackup(apiID string) error {
 
 	sugar.Debugf("DeleteBackup apiID=%s", apiID)
 
-	files, err := ioutil.ReadDir(*backupsDir)
+	dirs, err := ioutil.ReadDir(*backupsDir)
 	if err != nil {
 		return err
 	}
 
-	for _, file := range files {
-		sugar.Debugf("Backup File <Loop>: %s", file.Name())
-		if strings.Contains(file.Name(), apiID) && strings.Contains(file.Name(), dataStringSeparator) {
-			if _, err := os.Stat(*backupsDir + "/" + file.Name()); err == nil {
+	for _, dir := range dirs {
+		sugar.Debugf("Backup File <Loop>: %s", dir.Name())
+		if strings.Contains(dir.Name(), apiID) && strings.Contains(dir.Name(), dataStringSeparator) {
+			if _, err := os.Stat(*backupsDir + "/" + dir.Name()); err == nil {
 				sugar.Debugf("Found file for apiID reference: %s", apiID)
-				_, err0 := ioutil.ReadFile(*backupsDir + "/" + file.Name())
-				if err0 != nil {
-					return err0
-				}
-				err1 := os.Remove(*backupsDir + "/" + file.Name())
+				err1 := os.RemoveAll(*backupsDir + "/" + dir.Name())
 				if err1 != nil {
 					return err1
 				}
@@ -338,46 +271,29 @@ func (sb InfluxBackuper) DeleteBackup(apiID string) error {
 		}
 	}
 
-	sugar.Debugf("Delete apiID %s pgDumpID %s successful", apiID)
+	sugar.Debugf("Delete apiID %s successful", apiID)
 	return nil
 
 }
 
-func getDataID(apiID string) (string, string, error) {
+func retriveBackupSize(dir string) int64 {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync() // flushes buffer, if any
 	sugar := logger.Sugar()
 
-	sugar.Debugf("Searching dataID for apiID: %s", apiID)
-	files, err := ioutil.ReadDir(*backupsDir)
+	files, err := ioutil.ReadDir(dir)
+
 	if err != nil {
-		return "", "", err
+		sugar.Error("error retrieving file size: ", err)
+		return 0
 	}
+
 	for _, file := range files {
-		sugar.Debugf("Backup File <Loop>: %s", file.Name())
-		if strings.Contains(file.Name(), apiID) && strings.Contains(file.Name(), dataStringSeparator) {
-			if _, err := os.Stat(*backupsDir + "/" + file.Name()); err == nil {
-				sugar.Debugf("Found file for apiID reference: %s", apiID)
-				_, err0 := ioutil.ReadFile(*backupsDir + "/" + file.Name())
-				if err0 != nil {
-					return "", "", err0
-				}
-				pgDumpID := strings.Split(file.Name(), dataStringSeparator)[1]
-				sugar.Debugf("apiID %s <-> pgDumpID %s", apiID, pgDumpID)
-				return pgDumpID, file.Name(), nil
-			}
+		if strings.Contains(file.Name(), "tar.gz") {
+			return file.Size()
 		}
 	}
-	return "", "", fmt.Errorf("dumpID for %s not found", apiID)
-}
-
-func saveDataID(apiID string, dumpID string) error {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync() // flushes buffer, if any
-	sugar := logger.Sugar()
-
-	sugar.Debugf("IDs already saved apiID %s <-> dumpID %s", apiID, dumpID)
-	return nil
+	return 0
 }
 
 func resolveErrorFilePath(apiID string) string {

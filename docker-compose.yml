@@ -4,6 +4,8 @@ services:
 
   db:
     image: influxdb
+    volumes:
+      - ./influxdb.conf:/etc/influxdb/influxdb.conf:ro
 
   schelly:
     image: flaviostutz/schelly
